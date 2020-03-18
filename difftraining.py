@@ -31,10 +31,10 @@ parser.add_argument("--solver",default="adam",choices=('adam','sgd'),type=str, h
 parser.add_argument("--pickle",default="traintest.pickle",type=str)
 parser.add_argument("--num_modules",default=3,type=int,help="number of convolutional modules")
 parser.add_argument("--module_depth",default=1,type=int,help="number of layers in module")
-parser.add_argument("--module_connect",default="straight",choices=('straight','dense'),type=str, help="how module is connected")
+parser.add_argument("--module_connect",default="straight",choices=('straight','dense','residual'),type=str, help="how module is connected")
 parser.add_argument("--module_kernel_size",default=3,type=int,help="kernel size of module")
 parser.add_argument("--module_filters",default=128,type=int,help="number of filters in each module")
-parser.add_argument("--filter_factor",default=1,type=int,help="set filters to this raised to the current module index")
+parser.add_argument("--filter_factor",default=1,type=float,help="set filters to this raised to the current module index")
 parser.add_argument("--activation_function",default="elu",choices=('elu','relu','sigmoid'),help='activation function')
 parser.add_argument("--hidden_size",default=0,type=int,help='size of hidden layer, zero means none')
 parser.add_argument("--pool_type",default="max",choices=('max','ave'),help='type of pool to use between modules')
@@ -76,6 +76,7 @@ class Net(nn.Module):
     def __init__(self, dims):
         super(Net, self).__init__()
         self.modules = []
+        self.residuals = []
         nchannels = dims[0] 
         dim = dims[1]
         ksize = args.module_kernel_size
@@ -87,15 +88,29 @@ class Net(nn.Module):
         elif args.activation_function == 'sigmoid':
             func = F.sigmoid
             
+        inmultincr = 0
+        if args.module_connect == 'dense':
+            inmultincr = 1
+            
         for m in range(args.num_modules):
             module = []          
+            inmult = 1
             filters = int(args.module_filters*fmult  )
+            startchannels = nchannels
             for i in range(args.module_depth):
-                conv = nn.Conv3d(nchannels, filters, kernel_size=ksize, padding=pad)
+                conv = nn.Conv3d(nchannels*inmult, filters, kernel_size=ksize, padding=pad)
+                inmult += inmultincr
                 self.add_module('conv_%d_%d'%(m,i), conv)
                 module.append(conv)
                 module.append(func)
                 nchannels = filters
+            
+            if args.module_connect == 'residual':
+                #create a 1x1x1 convolution to match input filters to output
+                conv = nn.Conv3d(startchannels, nchannels, kernel_size=1, padding=0)
+                self.add_module('resconv_%d'%m,conv)
+                self.residuals.append(conv)
+                
             pool = nn.MaxPool3d(2)
             self.add_module('pool_%d'%m,pool)
             module.append(pool)
@@ -122,9 +137,34 @@ class Net(nn.Module):
             
 
     def forward(self, x):
-        for module in self.modules:
-            for layer in module:
+        isdense = False
+        isres = False
+        if args.module_connect == 'dense':
+            isdense = True
+        if args.module_connect == 'residual':
+            isres = True
+                        
+        for (m,module) in enumerate(self.modules):
+            prevconvs = []
+            if isres and len(self.residuals) > m:
+                #apply convolution
+                passthrough = self.residuals[m](x)
+            else:
+                isres = False
+            for (l,layer) in enumerate(module):
+                if isinstance(layer, nn.Conv3d) and isdense:
+                    if prevconvs:
+                        #concate along channels
+                        x = torch.cat((x,*prevconvs),1)
+                if isres and l == len(module)-1:
+                    #at last relu, do addition before
+                    x = x + passthrough
+                print(m,l,x.shape)
                 x = layer(x)
+                
+                if isinstance(layer, nn.Conv3d) and isdense:
+                    prevconvs.append(x) #save for later
+
         return x
 
 def weights_init(m):
@@ -174,7 +214,6 @@ def train_strata(strata, model, optimizer, losses, maxepoch, stop=20000):
             if trailing < bestloss:
                 bestloss = trailing
                 bestindex = len(losses)
-            
             wandb.log({'loss': float(loss),'trailing':trailing,'bestloss':bestloss,'stratasize':len(strata),'lr':optimizer.param_groups[0]['lr']})
             
             if len(losses)-bestindex > stop:
@@ -199,6 +238,7 @@ def test_strata(valexamples, model):
             output = model(input_tensor)   
             results.append(output.detach().cpu().numpy())
             labels.append(labelvec.detach().cpu().numpy())
+            print('testing')
             
         results = np.array(results).flatten()
         labels = np.array(labels).flatten()
