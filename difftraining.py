@@ -29,6 +29,15 @@ parser.add_argument("--resolution",default=0.25,type=float, help="Grid resolutio
 parser.add_argument("--clip",default=10,type=float, help="Gradient clipping")
 parser.add_argument("--solver",default="adam",choices=('adam','sgd'),type=str, help="solver to use (adam|sgd)")
 parser.add_argument("--pickle",default="traintest.pickle",type=str)
+parser.add_argument("--num_modules",default=3,type=int,help="number of convolutional modules")
+parser.add_argument("--module_depth",default=1,type=int,help="number of layers in module")
+parser.add_argument("--module_connect",default="straight",choices=('straight','dense'),type=str, help="how module is connected")
+parser.add_argument("--module_kernel_size",default=3,type=int,help="kernel size of module")
+parser.add_argument("--module_filters",default=128,type=int,help="number of filters in each module")
+parser.add_argument("--filter_factor",default=1,type=int,help="set filters to this raised to the current module index")
+parser.add_argument("--activation_function",default="elu",choices=('elu','relu','sigmoid'),help='activation function')
+parser.add_argument("--hidden_size",default=0,type=int,help='size of hidden layer, zero means none')
+parser.add_argument("--pool_type",default="max",choices=('max','ave'),help='type of pool to use between modules')
 
 args = parser.parse_args()
 
@@ -54,38 +63,69 @@ examples = load_examples(train)
 valexamples = load_examples(test)
   
 
-
+class View(nn.Module):
+    def __init__(self, shape):        
+        super(View, self).__init__()
+        self.shape = shape
+        
+    def forward(self, input):
+        return input.view(*self.shape)
+        
 #this is Daniela's model
 class Net(nn.Module):
     def __init__(self, dims):
         super(Net, self).__init__()
-        self.conv1 = nn.Conv3d(dims[0], 64, kernel_size=3, padding=1)
-        self.pool1 = nn.MaxPool3d(2)
-        self.conv2 = nn.Conv3d(64, 128, kernel_size=3, padding=1)
-        self.pool2 = nn.MaxPool3d(2)
-        self.conv3 = nn.Conv3d(128, 256, kernel_size=3, padding=1)
-        self.pool3 = nn.MaxPool3d(2)
-        self.conv4 = nn.Conv3d(256, 256, kernel_size=3, padding=1)
-        self.pool4 = nn.MaxPool3d(2)
-        self.conv5 = nn.Conv3d(256, 256, kernel_size=3, padding=1)
+        self.modules = []
+        nchannels = dims[0] 
+        dim = dims[1]
+        ksize = args.module_kernel_size
+        pad = ksize//2
+        fmult = 1
+        func = F.elu
+        if args.activation_function == 'relu':
+            func = F.relu
+        elif args.activation_function == 'sigmoid':
+            func = F.sigmoid
+            
+        for m in range(args.num_modules):
+            module = []          
+            filters = int(args.module_filters*fmult  )
+            for i in range(args.module_depth):
+                conv = nn.Conv3d(nchannels, filters, kernel_size=ksize, padding=pad)
+                self.add_module('conv_%d_%d'%(m,i), conv)
+                module.append(conv)
+                module.append(func)
+                nchannels = filters
+            pool = nn.MaxPool3d(2)
+            self.add_module('pool_%d'%m,pool)
+            module.append(pool)
+            dim /= 2
+            self.modules.append(module)
+            fmult *= args.filter_factor
+            
+        last_size = int(dim**3 * filters)
+        lastmod = []
+        lastmod.append(View((-1,last_size)))
         
-        self.last_layer_size = (dims[1]//16)**3 * 256
-        self.fc1 = nn.Linear(self.last_layer_size, 1)
+        if args.hidden_size > 0:
+            fc = nn.Linear(last_size, args.hidden_size)
+            self.add_module('hidden',fc)
+            lastmod.append(fc)
+            lastmod.append(func)
+            last_size = args.hidden_size
+            
+        fc = nn.Linear(last_size, 1)
+        self.add_module('fc',fc)
+        lastmod.append(fc)
+        lastmod.append(nn.Flatten())
+        self.modules.append(lastmod)
+            
 
     def forward(self, x):
-        x = F.elu(self.conv1(x))
-        x = self.pool1(x)
-        x = F.elu(self.conv2(x))
-        x = self.pool2(x)
-        x = F.elu(self.conv3(x))
-        x = self.pool3(x)
-        x = F.elu(self.conv4(x))
-        x = self.pool4(x)
-        x = F.elu(self.conv5(x))
-        
-        x = x.view(-1, self.last_layer_size)
-        x = self.fc1(x)
-        return x.flatten()
+        for module in self.modules:
+            for layer in module:
+                x = layer(x)
+        return x
 
 def weights_init(m):
     if isinstance(m, nn.Conv3d) or isinstance(m, nn.Linear):
@@ -121,7 +161,7 @@ def train_strata(strata, model, optimizer, losses, maxepoch, stop=20000):
 
             gmaker.forward(batch, input_tensor, 2, random_rotation=True)  #create grid; randomly translate/rotate molecule
             output = model(input_tensor) #run model
-            loss = F.smooth_l1_loss(output,labels)
+            loss = F.smooth_l1_loss(output.flatten(),labels.flaten())
             loss.backward()
             
             if args.clip > 0:
