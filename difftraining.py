@@ -145,11 +145,11 @@ input_tensor = torch.zeros(tensor_shape, dtype=torch.float32, device='cuda')
 labels = torch.zeros(batch_size, dtype=torch.float32, device='cuda')
 
 
-TRAIL = 40
+TRAIL = 100
 
 def train_strata(strata, model, optimizer, losses, maxepoch, stop=20000):
-    bestloss = 1000 #best trailing average loss we've seen so far in this strata
-    bestindex = 0 #position    
+    bestloss = 100000 #best trailing average loss we've seen so far in this strata
+    bestindex = len(losses) #position    
     for _ in range(maxepoch):  #do at most MAXEPOCH epochs, but should bail earlier
         np.random.shuffle(strata)
         for pos in range(0,len(strata),batch_size):
@@ -161,7 +161,7 @@ def train_strata(strata, model, optimizer, losses, maxepoch, stop=20000):
 
             gmaker.forward(batch, input_tensor, 2, random_rotation=True)  #create grid; randomly translate/rotate molecule
             output = model(input_tensor) #run model
-            loss = F.smooth_l1_loss(output.flatten(),labels.flaten())
+            loss = F.smooth_l1_loss(output.flatten(),labels.flatten())
             loss.backward()
             
             if args.clip > 0:
