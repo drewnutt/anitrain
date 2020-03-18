@@ -161,7 +161,7 @@ def train_strata(strata, model, optimizer, losses, maxepoch, stop=20000):
 
             gmaker.forward(batch, input_tensor, 2, random_rotation=True)  #create grid; randomly translate/rotate molecule
             output = model(input_tensor) #run model
-            loss = F.smooth_l1_loss(output.flatten(),labels.flaten())
+            loss = F.smooth_l1_loss(output.flatten(),labels.flatten())
             loss.backward()
             
             if args.clip > 0:
