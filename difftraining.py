@@ -29,12 +29,12 @@ parser.add_argument("--resolution",default=0.25,type=float, help="Grid resolutio
 parser.add_argument("--clip",default=10,type=float, help="Gradient clipping")
 parser.add_argument("--solver",default="adam",choices=('adam','sgd'),type=str, help="solver to use (adam|sgd)")
 parser.add_argument("--pickle",default="traintest.pickle",type=str)
-parser.add_argument("--num_modules",default=3,type=int,help="number of convolutional modules")
+parser.add_argument("--num_modules",default=5,type=int,help="number of convolutional modules")
 parser.add_argument("--module_depth",default=1,type=int,help="number of layers in module")
 parser.add_argument("--module_connect",default="straight",choices=('straight','dense','residual'),type=str, help="how module is connected")
 parser.add_argument("--module_kernel_size",default=3,type=int,help="kernel size of module")
-parser.add_argument("--module_filters",default=128,type=int,help="number of filters in each module")
-parser.add_argument("--filter_factor",default=1,type=float,help="set filters to this raised to the current module index")
+parser.add_argument("--module_filters",default=64,type=int,help="number of filters in each module")
+parser.add_argument("--filter_factor",default=2,type=float,help="set filters to this raised to the current module index")
 parser.add_argument("--activation_function",default="elu",choices=('elu','relu','sigmoid'),help='activation function')
 parser.add_argument("--hidden_size",default=0,type=int,help='size of hidden layer, zero means none')
 parser.add_argument("--pool_type",default="max",choices=('max','ave'),help='type of pool to use between modules')
@@ -110,11 +110,12 @@ class Net(nn.Module):
                 conv = nn.Conv3d(startchannels, nchannels, kernel_size=1, padding=0)
                 self.add_module('resconv_%d'%m,conv)
                 self.residuals.append(conv)
-                
-            pool = nn.MaxPool3d(2)
-            self.add_module('pool_%d'%m,pool)
-            module.append(pool)
-            dim /= 2
+            #don't pool on last module
+            if m < args.num_modules-1:
+                pool = nn.MaxPool3d(2)
+                self.add_module('pool_%d'%m,pool)
+                module.append(pool)
+                dim /= 2
             self.modules.append(module)
             fmult *= args.filter_factor
             
@@ -159,7 +160,7 @@ class Net(nn.Module):
                 if isres and l == len(module)-1:
                     #at last relu, do addition before
                     x = x + passthrough
-                print(m,l,x.shape)
+
                 x = layer(x)
                 
                 if isinstance(layer, nn.Conv3d) and isdense:
@@ -238,7 +239,6 @@ def test_strata(valexamples, model):
             output = model(input_tensor)   
             results.append(output.detach().cpu().numpy())
             labels.append(labelvec.detach().cpu().numpy())
-            print('testing')
             
         results = np.array(results).flatten()
         labels = np.array(labels).flatten()
