@@ -243,6 +243,8 @@ def test_strata(valexamples, model):
         results = np.array(results).flatten()
         labels = np.array(labels).flatten()
         valrmse = np.sqrt(np.mean((results - labels)**2))
+        if np.isinf(valrmse):
+            valrmse = 1000
         valame = np.mean(np.abs(results-labels))
         print("Validation",valrmse,valame)
         wandb.log({'valrmse': valrmse,'valame':valame})
