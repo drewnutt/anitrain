@@ -71,7 +71,6 @@ class View(nn.Module):
     def forward(self, input):
         return input.view(*self.shape)
         
-#this is Daniela's model
 class Net(nn.Module):
     def __init__(self, dims):
         super(Net, self).__init__()
@@ -215,7 +214,9 @@ def train_strata(strata, model, optimizer, losses, maxepoch, stop=20000):
             if trailing < bestloss:
                 bestloss = trailing
                 bestindex = len(losses)
-            wandb.log({'loss': float(loss),'trailing':trailing,'bestloss':bestloss,'stratasize':len(strata),'lr':optimizer.param_groups[0]['lr']})
+                torch.save(model.state_dict(), os.path.join(wandb.run.dir, 'model_better_%d_%d_%f.pt'%(_,pos,bestloss)))
+            if (pos % 100) == 0: 
+                wandb.log({'loss': float(loss),'trailing':trailing,'bestloss':bestloss,'stratasize':len(strata),'lr':optimizer.param_groups[0]['lr']})
             
             if len(losses)-bestindex > stop:
                 return True # "converged"
