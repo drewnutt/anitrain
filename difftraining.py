@@ -86,6 +86,10 @@ class Net(nn.Module):
             func = F.relu
         elif args.activation_function == 'sigmoid':
             func = F.sigmoid
+
+        pooler = nn.MaxPool3d
+        if args.pool_type == 'avg':
+            pooler = nn.AvgPool3d
             
         inmultincr = 0
         if args.module_connect == 'dense':
@@ -111,7 +115,7 @@ class Net(nn.Module):
                 self.residuals.append(conv)
             #don't pool on last module
             if m < args.num_modules-1:
-                pool = nn.MaxPool3d(2)
+                pool = pooler(2)
                 self.add_module('pool_%d'%m,pool)
                 module.append(pool)
                 dim /= 2
