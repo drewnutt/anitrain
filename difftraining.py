@@ -94,15 +94,19 @@ class Net(nn.Module):
         inmultincr = 0
         if args.module_connect == 'dense':
             inmultincr = 1
+            conv = nn.Conv3d(nchannelse, args.module_filters, kernel_size=ksize, padding=pad)
+            self.add_module('init_conv', conv)
+            self.modules.append([conv,func])
+            nchannels = args.module_filters
             
         for m in range(args.num_modules):
             module = []          
-            inmult = 1
+            # inmult = 1
             filters = int(args.module_filters*fmult  )
             startchannels = nchannels
             for i in range(args.module_depth):
-                conv = nn.Conv3d(nchannels*inmult, filters, kernel_size=ksize, padding=pad)
-                inmult += inmultincr
+                conv = nn.Conv3d((1-inmultincr)*nchannels+inmultincr*(startchannels+(i*filters)), filters, kernel_size=ksize, padding=pad)
+                # inmult += inmultincr
                 self.add_module('conv_%d_%d'%(m,i), conv)
                 module.append(conv)
                 module.append(func)
@@ -149,7 +153,7 @@ class Net(nn.Module):
             isres = True
                         
         for (m,module) in enumerate(self.modules):
-            prevconvs = []
+            prevconvs = [x]
             if isres and len(self.residuals) > m:
                 #apply convolution
                 passthrough = self.residuals[m](x)
@@ -159,7 +163,7 @@ class Net(nn.Module):
                 if isinstance(layer, nn.Conv3d) and isdense:
                     if prevconvs:
                         #concate along channels
-                        x = torch.cat((x,*prevconvs),1)
+                        x = torch.cat(prevconvs,dim=1)
                 if isres and l == len(module)-1:
                     #at last relu, do addition before
                     x = x + passthrough
