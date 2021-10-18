@@ -17,6 +17,7 @@ import os, glob
 import matplotlib.pyplot as plt
 import wandb
 import argparse, pickle
+import itertools
 
 
 
@@ -33,11 +34,12 @@ parser.add_argument("--num_modules",default=5,type=int,help="number of convoluti
 parser.add_argument("--module_depth",default=1,type=int,help="number of layers in module")
 parser.add_argument("--module_connect",default="straight",choices=('straight','dense','residual'),type=str, help="how module is connected")
 parser.add_argument("--module_kernel_size",default=3,type=int,help="kernel size of module")
-parser.add_argument("--module_filters",default=64,type=int,help="number of filters in each module")
-parser.add_argument("--filter_factor",default=2,type=float,help="set filters to this raised to the current module index")
+parser.add_argument("--module_filters",default=64,nargs='+',type=int,help="number of filters in each module")
+parser.add_argument("--filter_factor",default=2,nargs='+',type=float,help="set filters to this raised to the current module index")
 parser.add_argument("--activation_function",default="elu",choices=('elu','relu','sigmoid'),help='activation function')
 parser.add_argument("--hidden_size",default=0,type=int,help='size of hidden layer, zero means none')
 parser.add_argument("--pool_type",default="max",choices=('max','ave'),help='type of pool to use between modules')
+parser.add_argument("--conv_type",default="conv",choices=('conv','se3'),help='type of convolution to use, "conv" is normal nn.Conv3d and "se3" is equivariant convolution')
 
 args = parser.parse_args()
 
@@ -76,7 +78,7 @@ class Net(nn.Module):
         super(Net, self).__init__()
         self.modules = []
         self.residuals = []
-        nchannels = dims[0] 
+        nchannels = dims[0]
         dim = dims[1]
         ksize = args.module_kernel_size
         pad = ksize//2
@@ -90,11 +92,25 @@ class Net(nn.Module):
         pooler = nn.MaxPool3d
         if args.pool_type == 'avg':
             pooler = nn.AvgPool3d
+
+        if args.conv_type == 'se3':
+            if isinstance(nchannels, int):
+                nchannels = (nchannels, )
+            fmult = (1, )
+        elif args.conv_type == 'conv':
+            args.module_filters = args.module_filters[0]
+            args.filter_factor = args.filter_factor[0]
+
             
         inmultincr = 0
         if args.module_connect == 'dense':
             inmultincr = 1
-            conv = nn.Conv3d(nchannelse, args.module_filters, kernel_size=ksize, padding=pad)
+            if args.conv_type == 'conv':
+                assert isinstance(nchannels, int) and isinstance(args.module_filters, int)
+                conv = nn.Conv3d(nchannels, args.module_filters, kernel_size=ksize, padding=pad)
+            elif args.conv_type == 'se3':
+                activ = self.getGatedBlockActivation(nchannels,args.module_filters)
+                conv = GatedBlock(nchannels, args.module_filters, size=ksize, padding=pad, stride=1, activation=activ)
             self.add_module('init_conv', conv)
             self.modules.append([conv,func])
             nchannels = args.module_filters
@@ -102,19 +118,37 @@ class Net(nn.Module):
         for m in range(args.num_modules):
             module = []          
             # inmult = 1
-            filters = int(args.module_filters*fmult  )
+            if args.conv_type == 'se3':
+                filters = tuple([int(mfilt*fm) for mfilt, fm in itertools.zip_longest(args.module_filters,fmult,fillvalue=0)])
+            else:
+                filters = int(args.module_filters*fmult  )
             startchannels = nchannels
             for i in range(args.module_depth):
-                conv = nn.Conv3d((1-inmultincr)*nchannels+inmultincr*(startchannels+(i*filters)), filters, kernel_size=ksize, padding=pad)
+                if args.conv_type == 'conv':
+                    assert isinstance(channels, int) and isinstance(args.module_filters, int)
+                    conv = nn.Conv3d((1-inmultincr)*nchannels+inmultincr*(startchannels+(i*filters)), filters, kernel_size=ksize, padding=pad)
+                elif args.conv_type == 'se3':
+                    in_nchannels = tuple([(1-inmultincr)*chan + inmultincr*(s_nchan+(i*filt))
+                        for chan, s_nchan, filt in itertools.zip_longest(nchannels, startchannels, filters, fillvalue=0)])
+                    activ = self.getGatedBlockActivation(in_nchannels,filters)
+                    conv = GatedBlock(in_nchannels, filters, size=ksize, padding=pad, stride=1, activation=activ)
                 # inmult += inmultincr
                 self.add_module('conv_%d_%d'%(m,i), conv)
                 module.append(conv)
-                module.append(func)
+                if args.conv_type == 'conv':
+                    module.append(func)
+                else: ## don't need activation if SE3 (already included in GatedBlock)
+                    module.append(nn.Identity())
                 nchannels = filters
             
             if args.module_connect == 'residual':
                 #create a 1x1x1 convolution to match input filters to output
-                conv = nn.Conv3d(startchannels, nchannels, kernel_size=1, padding=0)
+                if args.conv_type == 'conv':
+                    conv = nn.Conv3d(startchannels, nchannels, kernel_size=1, padding=0)
+                elif args.conv_type == 'se3':
+                    activ = self.getGatedBlockActivation(startchannels,nchannels)
+                    conv = GatedBlock(startnchannels, nchannels, size=1, padding=0, stride=1, activation=activ)
+                    
                 self.add_module('resconv_%d'%m,conv)
                 self.residuals.append(conv)
             #don't pool on last module
@@ -124,9 +158,16 @@ class Net(nn.Module):
                 module.append(pool)
                 dim /= 2
             self.modules.append(module)
-            fmult *= args.filter_factor
+            if args.conv_type == 'conv':
+                fmult *= args.filter_factor
+            else:
+                fmult = tuple([fm * ff for fm, ff in itertools.zip_longest(fmult,args.filter_factor,fill_value=0)])
             
-        last_size = int(dim**3 * filters)
+        last_size = dim**3
+        if args.conv_type == 'conv':
+            last_size = int(last_size * filters)
+        else:
+            last_size = int(sum([(2*l+1)*mult for l, mult in enumerate(filters)])*last_size)
         lastmod = []
         lastmod.append(View((-1,last_size)))
         
@@ -144,6 +185,14 @@ class Net(nn.Module):
         self.modules.append(lastmod)
             
 
+    def decomposeTensorMultiplicities(self, x, mult, dims, gate_act):
+        end = None
+        if sum(mult[1:]) and gate_act: #there is a scalar gate layer that doesn't affect output size but only if there are non scalars
+            end = -1
+        splits = [m * l for m, l in zip(mult[:end], dims[:end])]
+        
+        return x.split(splits,dim=1)
+
     def forward(self, x):
         isdense = False
         isres = False
@@ -154,26 +203,58 @@ class Net(nn.Module):
                         
         for (m,module) in enumerate(self.modules):
             prevconvs = [x]
+            last_mult, last_dims, last_ga = None, None, None
             if isres and len(self.residuals) > m:
                 #apply convolution
                 passthrough = self.residuals[m](x)
+                if isinstance(self.residuals[m], GatedBlock):
+                    last_mult = self.residuals[m].conv.kernel.multiplicities_out
+                    last_dims = self.residuals[m].conv.kernel.dims_out
+                    last_ga = self.residuals[m].gate_act
+                    passthrough = self.decomposeTensorMultiplicities(passthrough, last_mult,
+                            last_dims, last_ga)
             else:
                 isres = False
             for (l,layer) in enumerate(module):
                 if isinstance(layer, nn.Conv3d) and isdense:
-                    if prevconvs:
-                        #concate along channels
+                    if len(prevconvs) > 1:
+                        # concate along channels
                         x = torch.cat(prevconvs,dim=1)
+                elif isinstance(layer, GatedBlock) and isdense:
+                    if l:
+                        x = torch.cat([multiplicity for multiplicity in itertools.chain(*itertools.zip_longest(in_div, out_div))
+                            if multiplicity is not None], dim=1)
+                    in_div = self.decomposeTensorMultiplicities(x, layer.conv.multiplicities_in, layer.conv.kernel.dims_in, None)
                 if isres and l == len(module)-1:
                     #at last relu, do addition before
-                    x = x + passthrough
+                    if isinstance(passthrough, torch.Tensor):
+                        x = x + passthrough
+                    else:
+                        x = self.decomposeTensorMultiplicities(x, last_mult, last_dims, last_ga)
+                        x = torch.cat([x_i + p for x_i, p in itertools.zip_longest(x, passthrough, fillvalue=0)],dim=1)
 
                 x = layer(x)
                 
-                if isinstance(layer, nn.Conv3d) and isdense:
-                    prevconvs.append(x) #save for later
+                if isdense:
+                    if isinstance(layer,GatedBlock):
+                        last_mult = layer.conv.kernel.multiplicities_out
+                        last_dims = layer.conv.kernel.dims_out
+                        last_ga = layer.gate_act
+                        out_div = self.decomposeTensorMultiplicities(x, last_mult, last_dims, last_ga)
+                    elif isinstance(layer, nn.Conv3d) and isdense:
+                        prevconvs.append(x) #save for later
 
         return x
+    
+    def getGatedBlockActivation(self,inchannels,outchannels):
+        activ_1 = F.relu
+        if len(inchannels) == 1 or sum(inchannels[1:]) <= 0:
+                activ_1 = None
+        activ_2 = F.sigmoid
+        if len(outchannels) == 1 or sum(outchannels[1:]) <= 0:
+            activ_2 = None
+
+        return (activ_1,activ_2)
 
 def weights_init(m):
     if isinstance(m, nn.Conv3d) or isinstance(m, nn.Linear):
