@@ -99,9 +99,9 @@ class Net(nn.Module):
                 nchannels = (nchannels, )
             fmult = (1, )
         elif args.conv_type == 'conv':
-            assert isinstance(nchannels, int) and isinstance(args.module_filters, int)
             args.module_filters = args.module_filters[0]
             args.filter_factor = args.filter_factor[0]
+            assert isinstance(nchannels, int) and isinstance(args.module_filters, int)
 
             
         inmultincr = 0
