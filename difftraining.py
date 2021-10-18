@@ -18,6 +18,7 @@ import matplotlib.pyplot as plt
 import wandb
 import argparse, pickle
 import itertools
+from se3cnn.image.gated_block import GatedBlock
 
 
 
@@ -98,6 +99,7 @@ class Net(nn.Module):
                 nchannels = (nchannels, )
             fmult = (1, )
         elif args.conv_type == 'conv':
+            assert isinstance(nchannels, int) and isinstance(args.module_filters, int)
             args.module_filters = args.module_filters[0]
             args.filter_factor = args.filter_factor[0]
 
@@ -125,7 +127,7 @@ class Net(nn.Module):
             startchannels = nchannels
             for i in range(args.module_depth):
                 if args.conv_type == 'conv':
-                    assert isinstance(channels, int) and isinstance(args.module_filters, int)
+                    assert isinstance(nchannels, int)
                     conv = nn.Conv3d((1-inmultincr)*nchannels+inmultincr*(startchannels+(i*filters)), filters, kernel_size=ksize, padding=pad)
                 elif args.conv_type == 'se3':
                     in_nchannels = tuple([(1-inmultincr)*chan + inmultincr*(s_nchan+(i*filt))
