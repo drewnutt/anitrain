@@ -163,7 +163,7 @@ class Net(nn.Module):
             if args.conv_type == 'conv':
                 fmult *= args.filter_factor
             else:
-                fmult = tuple([fm * ff for fm, ff in itertools.zip_longest(fmult,args.filter_factor,fill_value=0)])
+                fmult = tuple([fm * ff for fm, ff in itertools.zip_longest(fmult,args.filter_factor,fillvalue=0)])
             
         last_size = dim**3
         if args.conv_type == 'conv':
