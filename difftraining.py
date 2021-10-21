@@ -149,7 +149,7 @@ class Net(nn.Module):
                     conv = nn.Conv3d(startchannels, nchannels, kernel_size=1, padding=0)
                 elif args.conv_type == 'se3':
                     activ = self.getGatedBlockActivation(startchannels,nchannels)
-                    conv = GatedBlock(startnchannels, nchannels, size=1, padding=0, stride=1, activation=activ)
+                    conv = GatedBlock(startchannels, nchannels, size=1, padding=0, stride=1, activation=activ)
                     
                 self.add_module('resconv_%d'%m,conv)
                 self.residuals.append(conv)
