@@ -226,7 +226,7 @@ class Net(nn.Module):
                     if l:
                         x = torch.cat([multiplicity for multiplicity in itertools.chain(*itertools.zip_longest(in_div, out_div))
                             if multiplicity is not None], dim=1)
-                    in_div = self.decomposeTensorMultiplicities(x, layer.conv.multiplicities_in, layer.conv.kernel.dims_in, None)
+                    in_div = self.decomposeTensorMultiplicities(x, layer.conv.kernel.multiplicities_in, layer.conv.kernel.dims_in, None)
                 if isres and l == len(module)-1:
                     #at last relu, do addition before
                     if isinstance(passthrough, torch.Tensor):
