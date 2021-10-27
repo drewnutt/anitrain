@@ -36,6 +36,10 @@ parser.add_argument("--module_depth",default=1,type=int,help="number of layers i
 parser.add_argument("--module_connect",default="straight",choices=('straight','dense','residual'),type=str, help="how module is connected")
 parser.add_argument("--module_kernel_size",default=3,type=int,help="kernel size of module")
 parser.add_argument("--module_filters",default=64,nargs='+',type=int,help="number of filters in each module")
+parser.add_argument("--module_filters_0",type=int,help="number of filters in each module, scalar")
+parser.add_argument("--module_filters_1",type=int,help="number of filters in each module, vect")
+parser.add_argument("--module_filters_2",type=int,help="number of filters in each module, mult2")
+parser.add_argument("--module_filters_3",type=int,help="number of filters in each module, mult3")
 parser.add_argument("--filter_factor",default=2,nargs='+',type=float,help="set filters to this raised to the current module index")
 parser.add_argument("--activation_function",default="elu",choices=('elu','relu','sigmoid'),help='activation function')
 parser.add_argument("--hidden_size",default=0,type=int,help='size of hidden layer, zero means none')
@@ -43,6 +47,10 @@ parser.add_argument("--pool_type",default="max",choices=('max','ave'),help='type
 parser.add_argument("--conv_type",default="conv",choices=('conv','se3'),help='type of convolution to use, "conv" is normal nn.Conv3d and "se3" is equivariant convolution')
 
 args = parser.parse_args()
+
+if args.module_filters_1 or args.module_filters_0 or args.module_filters_2 or args.module_filters_3:
+    args.module_filters = tuple([val if val else 0 for val in [args.module_filters_0, args.module_filters_1, args.module_filters_2, args.module_filters_3] ])
+    print(args.module_filters)
 
 typemap = {'H': 0, 'C': 1, 'N': 2, 'O': 3} #type indices
 typeradii = [1.0, 1.6, 1.5, 1.4] #not really sure how sensitive the model is to radii
@@ -63,7 +71,9 @@ def load_examples(T):
   return examples
   
 examples = load_examples(train)
+del train
 valexamples = load_examples(test)
+del test
   
 
 class View(nn.Module):
@@ -262,6 +272,8 @@ def weights_init(m):
     if isinstance(m, nn.Conv3d) or isinstance(m, nn.Linear):
         init.xavier_uniform_(m.weight.data)
         init.constant_(m.bias.data, 0)
+    if isinstance(m, GatedBlock):
+        init.xavier_uniform_(m.conv.kernel.weight.data)
 
 
 
