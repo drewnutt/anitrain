@@ -18,6 +18,7 @@ import matplotlib.pyplot as plt
 import wandb
 import argparse, pickle
 import itertools
+import math
 from se3cnn.image.gated_block import GatedBlock
 
 
@@ -273,12 +274,15 @@ def weights_init(m):
         init.xavier_uniform_(m.weight.data)
         init.constant_(m.bias.data, 0)
     if isinstance(m, GatedBlock):
-        init.xavier_uniform_(m.conv.kernel.weight.data)
-
-
+        # Need to calculate fan_in and fan_out myself, weights are kept as a 1D array normally
+        fan_in, fan_out = init._calculate_fan_in_and_fan_out(m.conv.kernel.forward())
+        gain = 1.0
+        std = gain * math.sqrt(2.0 / float(fan_in + fan_out))
+        a = math.sqrt(3.0) * std
+        init._no_grad_uniform_(m.conv.kernel.weight.data,-a,a)
 
 gmaker = molgrid.GridMaker(resolution=args.resolution, dimension = 16-args.resolution)
-batch_size = 25
+batch_size = 8
 dims = gmaker.grid_dimensions(4) # 4 types
 tensor_shape = (batch_size,)+dims  #shape of batched input
 
