@@ -49,7 +49,11 @@ typeradii = [1.0, 1.6, 1.5, 1.4] #not really sure how sensitive the model is to 
 
 
 #load data
-(train, test) = pickle.load(open(args.pickle,'rb'))
+examples = molgrid.Example_Provider(recmolcache=args.molcache, shuffle=True)
+examples.populate(args.train_types)
+valexamples = molgrid.Example_Provider(recmolcache=args.molcache)
+valexamples.populate(args.test_types)
+# (train, test) = pickle.load(open(args.pickle,'rb'))
 
 def load_examples(T):
   examples = []
@@ -62,8 +66,8 @@ def load_examples(T):
     examples.append(ex)
   return examples
   
-examples = load_examples(train)
-valexamples = load_examples(test)
+# examples = load_examples(train)
+# valexamples = load_examples(test)
   
 
 class View(nn.Module):
@@ -288,6 +292,40 @@ def train_strata(strata, model, optimizer, losses, maxepoch, stop=20000):
             if len(batch) < batch_size: #wrap last batch
                 batch += strata[:batch_size-len(batch)]
             batch = molgrid.ExampleVec(batch)
+            batch.extract_label(0,labels) # extract first label (there is only one in this case)
+
+            gmaker.forward(batch, input_tensor, 2, random_rotation=True)  #create grid; randomly translate/rotate molecule
+            output = model(input_tensor) #run model
+            loss = F.smooth_l1_loss(output.flatten(),labels.flatten())
+            loss.backward()
+            
+            if args.clip > 0:
+              nn.utils.clip_grad_norm_(model.parameters(),args.clip)
+
+            optimizer.step()
+            losses.append(float(loss))
+            trailing = np.mean(losses[-TRAIL:])
+            
+            if trailing < bestloss:
+                bestloss = trailing
+                bestindex = len(losses)
+                torch.save(model.state_dict(), os.path.join(wandb.run.dir, 'model_better_%d_%d_%f.pt'%(_,pos,bestloss)))
+            if (pos % 100) == 0: 
+                wandb.log({'loss': float(loss),'trailing':trailing,'bestloss':bestloss,'stratasize':len(strata),'lr':optimizer.param_groups[0]['lr']})
+            
+            if len(losses)-bestindex > stop:
+                return True # "converged"
+    return False
+
+def train_strata(strata, model, optimizer, losses, maxepoch, stop=20000):
+    bestloss = 100000 #best trailing average loss we've seen so far in this strata
+    bestindex = len(losses) #position    
+    for _ in range(maxepoch):  #do at most MAXEPOCH epochs, but should bail earlier
+        for batch in strata:
+            # batch = strata[pos:pos+batch_size]
+            # if len(batch) < batch_size: #wrap last batch
+            #     batch += strata[:batch_size-len(batch)]
+            # batch = molgrid.ExampleVec(batch)
             batch.extract_label(0,labels) # extract first label (there is only one in this case)
 
             gmaker.forward(batch, input_tensor, 2, random_rotation=True)  #create grid; randomly translate/rotate molecule
