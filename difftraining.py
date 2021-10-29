@@ -18,6 +18,7 @@ import matplotlib.pyplot as plt
 import wandb
 import argparse, pickle
 import itertools
+import math
 from se3cnn.image.gated_block import GatedBlock
 
 
@@ -36,6 +37,10 @@ parser.add_argument("--module_depth",default=1,type=int,help="number of layers i
 parser.add_argument("--module_connect",default="straight",choices=('straight','dense','residual'),type=str, help="how module is connected")
 parser.add_argument("--module_kernel_size",default=3,type=int,help="kernel size of module")
 parser.add_argument("--module_filters",default=64,nargs='+',type=int,help="number of filters in each module")
+parser.add_argument("--module_filters_0",type=int,help="number of filters in each module, scalar")
+parser.add_argument("--module_filters_1",type=int,help="number of filters in each module, vect")
+parser.add_argument("--module_filters_2",type=int,help="number of filters in each module, mult2")
+parser.add_argument("--module_filters_3",type=int,help="number of filters in each module, mult3")
 parser.add_argument("--filter_factor",default=2,nargs='+',type=float,help="set filters to this raised to the current module index")
 parser.add_argument("--activation_function",default="elu",choices=('elu','relu','sigmoid'),help='activation function')
 parser.add_argument("--hidden_size",default=0,type=int,help='size of hidden layer, zero means none')
@@ -43,6 +48,10 @@ parser.add_argument("--pool_type",default="max",choices=('max','ave'),help='type
 parser.add_argument("--conv_type",default="conv",choices=('conv','se3'),help='type of convolution to use, "conv" is normal nn.Conv3d and "se3" is equivariant convolution')
 
 args = parser.parse_args()
+
+if args.module_filters_1 or args.module_filters_0 or args.module_filters_2 or args.module_filters_3:
+    args.module_filters = tuple([val if val else 0 for val in [args.module_filters_0, args.module_filters_1, args.module_filters_2, args.module_filters_3] ])
+    print(args.module_filters)
 
 typemap = {'H': 0, 'C': 1, 'N': 2, 'O': 3} #type indices
 typeradii = [1.0, 1.6, 1.5, 1.4] #not really sure how sensitive the model is to radii
@@ -67,7 +76,9 @@ def load_examples(T):
   return examples
   
 # examples = load_examples(train)
+# del train
 # valexamples = load_examples(test)
+# del test
   
 
 class View(nn.Module):
@@ -103,9 +114,9 @@ class Net(nn.Module):
                 nchannels = (nchannels, )
             fmult = (1, )
         elif args.conv_type == 'conv':
-            assert isinstance(nchannels, int) and isinstance(args.module_filters, int)
             args.module_filters = args.module_filters[0]
             args.filter_factor = args.filter_factor[0]
+            assert isinstance(nchannels, int) and isinstance(args.module_filters, int)
 
             
         inmultincr = 0
@@ -153,7 +164,7 @@ class Net(nn.Module):
                     conv = nn.Conv3d(startchannels, nchannels, kernel_size=1, padding=0)
                 elif args.conv_type == 'se3':
                     activ = self.getGatedBlockActivation(startchannels,nchannels)
-                    conv = GatedBlock(startnchannels, nchannels, size=1, padding=0, stride=1, activation=activ)
+                    conv = GatedBlock(startchannels, nchannels, size=1, padding=0, stride=1, activation=activ)
                     
                 self.add_module('resconv_%d'%m,conv)
                 self.residuals.append(conv)
@@ -167,7 +178,7 @@ class Net(nn.Module):
             if args.conv_type == 'conv':
                 fmult *= args.filter_factor
             else:
-                fmult = tuple([fm * ff for fm, ff in itertools.zip_longest(fmult,args.filter_factor,fill_value=0)])
+                fmult = tuple([fm * ff for fm, ff in itertools.zip_longest(fmult,args.filter_factor,fillvalue=0)])
             
         last_size = dim**3
         if args.conv_type == 'conv':
@@ -230,7 +241,7 @@ class Net(nn.Module):
                     if l:
                         x = torch.cat([multiplicity for multiplicity in itertools.chain(*itertools.zip_longest(in_div, out_div))
                             if multiplicity is not None], dim=1)
-                    in_div = self.decomposeTensorMultiplicities(x, layer.conv.multiplicities_in, layer.conv.kernel.dims_in, None)
+                    in_div = self.decomposeTensorMultiplicities(x, layer.conv.kernel.multiplicities_in, layer.conv.kernel.dims_in, None)
                 if isres and l == len(module)-1:
                     #at last relu, do addition before
                     if isinstance(passthrough, torch.Tensor):
@@ -266,11 +277,16 @@ def weights_init(m):
     if isinstance(m, nn.Conv3d) or isinstance(m, nn.Linear):
         init.xavier_uniform_(m.weight.data)
         init.constant_(m.bias.data, 0)
-
-
+    if isinstance(m, GatedBlock):
+        # Need to calculate fan_in and fan_out myself, weights are kept as a 1D array normally
+        fan_in, fan_out = init._calculate_fan_in_and_fan_out(m.conv.kernel.forward())
+        gain = 1.0
+        std = gain * math.sqrt(2.0 / float(fan_in + fan_out))
+        a = math.sqrt(3.0) * std
+        init._no_grad_uniform_(m.conv.kernel.weight.data,-a,a)
 
 gmaker = molgrid.GridMaker(resolution=args.resolution, dimension = 16-args.resolution)
-batch_size = 25
+batch_size = 8
 dims = gmaker.grid_dimensions(4) # 4 types
 tensor_shape = (batch_size,)+dims  #shape of batched input
 
