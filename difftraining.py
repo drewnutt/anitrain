@@ -39,12 +39,12 @@ parser.add_argument("--num_modules",default=5,type=int,help="number of convoluti
 parser.add_argument("--module_depth",default=1,type=int,help="number of layers in module")
 parser.add_argument("--module_connect",default="straight",choices=('straight','dense','residual'),type=str, help="how module is connected")
 parser.add_argument("--module_kernel_size",default=3,type=int,help="kernel size of module")
-parser.add_argument("--module_filters",default=64,nargs='+',type=int,help="number of filters in each module")
+parser.add_argument("--module_filters",default=[64],nargs='+',type=int,help="number of filters in each module")
 parser.add_argument("--module_filters_0",type=int,help="number of filters in each module, scalar")
 parser.add_argument("--module_filters_1",type=int,help="number of filters in each module, vect")
 parser.add_argument("--module_filters_2",type=int,help="number of filters in each module, mult2")
 parser.add_argument("--module_filters_3",type=int,help="number of filters in each module, mult3")
-parser.add_argument("--filter_factor",default=2,nargs='+',type=float,help="set filters to this raised to the current module index")
+parser.add_argument("--filter_factor",default=[2],nargs='+',type=float,help="set filters to this raised to the current module index")
 parser.add_argument("--activation_function",default="elu",choices=('elu','relu','sigmoid'),help='activation function')
 parser.add_argument("--hidden_size",default=0,type=int,help='size of hidden layer, zero means none')
 parser.add_argument("--pool_type",default="max",choices=('max','ave'),help='type of pool to use between modules')
@@ -61,9 +61,11 @@ typeradii = [1.0, 1.6, 1.5, 1.4] #not really sure how sensitive the model is to 
 
 
 #load data
-examples = molgrid.Example_Provider(recmolcache=args.molcache, shuffle=True)
+batch_size = 8
+typer = molgrid.SubsettedGninaTyper([0,2,6,10],catchall=False)
+examples = molgrid.ExampleProvider(typer,molgrid.NullIndexTyper(),recmolcache=args.molcache, shuffle=True,default_batch_size=batch_size)
 examples.populate(args.train_types)
-valexamples = molgrid.Example_Provider(recmolcache=args.molcache)
+valexamples = molgrid.ExampleProvider(typer,molgrid.NullIndexTyper(),recmolcache=args.molcache,default_batch_size=batch_size)
 valexamples.populate(args.test_types)
 # (train, test) = pickle.load(open(args.pickle,'rb'))
 
@@ -289,7 +291,6 @@ def weights_init(m):
         init._no_grad_uniform_(m.conv.kernel.weight.data,-a,a)
 
 gmaker = molgrid.GridMaker(resolution=args.resolution, dimension = 16-args.resolution)
-batch_size = 8
 dims = gmaker.grid_dimensions(4) # 4 types
 tensor_shape = (batch_size,)+dims  #shape of batched input
 
@@ -382,6 +383,35 @@ def test_strata(valexamples, model):
             if len(batch) < batch_size: #wrap last batch
                 batch += valexamples[:batch_size-len(batch)]
             batch = molgrid.ExampleVec(batch)
+            batch.extract_label(0,labelvec) # extract first label (there is only one in this case)
+
+            gmaker.forward(batch, input_tensor, 2, random_rotation=True)  #create grid; randomly translate/rotate molecule
+            output = model(input_tensor)   
+            results.append(output.detach().cpu().numpy())
+            labels.append(labelvec.detach().cpu().numpy())
+            
+        results = np.array(results).flatten()
+        labels = np.array(labels).flatten()
+        valrmse = np.sqrt(np.mean((results - labels)**2))
+        if np.isinf(valrmse):
+            valrmse = 1000
+        valame = np.mean(np.abs(results-labels))
+        print("Validation",valrmse,valame)
+        wandb.log({'valrmse': valrmse,'valame':valame})
+        wandb.log({'valpred':results,'valtrue':labels})
+
+def test_strata(valexamples, model):
+    with torch.no_grad():
+        model.eval()
+        results = []
+        labels = []
+        labelvec = torch.zeros(batch_size, dtype=torch.float32, device='cuda')
+        # for pos in range(0,len(valexamples),batch_size):
+        for idx, batch in enumerate(valexamples):
+#            batch = valexamples[pos:pos+batch_size]
+#            if len(batch) < batch_size: #wrap last batch
+#                batch += valexamples[:batch_size-len(batch)]
+#            batch = molgrid.ExampleVec(batch)
             batch.extract_label(0,labelvec) # extract first label (there is only one in this case)
 
             gmaker.forward(batch, input_tensor, 2, random_rotation=True)  #create grid; randomly translate/rotate molecule
