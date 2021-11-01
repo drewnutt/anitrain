@@ -63,7 +63,7 @@ typeradii = [1.0, 1.6, 1.5, 1.4] #not really sure how sensitive the model is to 
 #load data
 batch_size = 8
 typer = molgrid.SubsettedGninaTyper([0,2,6,10],catchall=False)
-examples = molgrid.ExampleProvider(typer,molgrid.NullIndexTyper(),recmolcache=args.molcache, shuffle=True,default_batch_size=batch_size)
+examples = molgrid.ExampleProvider(typer,molgrid.NullIndexTyper(),recmolcache=args.molcache, shuffle=True,default_batch_size=batch_size, iteration_scheme=molgrid.IterationScheme.LargeEpoch)
 examples.populate(args.train_types)
 valexamples = molgrid.ExampleProvider(typer,molgrid.NullIndexTyper(),recmolcache=args.molcache,default_batch_size=batch_size)
 valexamples.populate(args.test_types)
@@ -372,33 +372,33 @@ def train_strata(strata, model, optimizer, losses, maxepoch, stop=20000):
     return False
 
 
-def test_strata(valexamples, model):
-    with torch.no_grad():
-        model.eval()
-        results = []
-        labels = []
-        labelvec = torch.zeros(batch_size, dtype=torch.float32, device='cuda')
-        for pos in range(0,len(valexamples),batch_size):
-            batch = valexamples[pos:pos+batch_size]
-            if len(batch) < batch_size: #wrap last batch
-                batch += valexamples[:batch_size-len(batch)]
-            batch = molgrid.ExampleVec(batch)
-            batch.extract_label(0,labelvec) # extract first label (there is only one in this case)
+# def test_strata(valexamples, model):
+#     with torch.no_grad():
+#         model.eval()
+#         results = []
+#         labels = []
+#         labelvec = torch.zeros(batch_size, dtype=torch.float32, device='cuda')
+#         for pos in range(0,len(valexamples),batch_size):
+#             batch = valexamples[pos:pos+batch_size]
+#             if len(batch) < batch_size: #wrap last batch
+#                 batch += valexamples[:batch_size-len(batch)]
+#             batch = molgrid.ExampleVec(batch)
+#             batch.extract_label(0,labelvec) # extract first label (there is only one in this case)
 
-            gmaker.forward(batch, input_tensor, 2, random_rotation=True)  #create grid; randomly translate/rotate molecule
-            output = model(input_tensor)   
-            results.append(output.detach().cpu().numpy())
-            labels.append(labelvec.detach().cpu().numpy())
+#             gmaker.forward(batch, input_tensor, 2, random_rotation=True)  #create grid; randomly translate/rotate molecule
+#             output = model(input_tensor)   
+#             results.append(output.detach().cpu().numpy())
+#             labels.append(labelvec.detach().cpu().numpy())
             
-        results = np.array(results).flatten()
-        labels = np.array(labels).flatten()
-        valrmse = np.sqrt(np.mean((results - labels)**2))
-        if np.isinf(valrmse):
-            valrmse = 1000
-        valame = np.mean(np.abs(results-labels))
-        print("Validation",valrmse,valame)
-        wandb.log({'valrmse': valrmse,'valame':valame})
-        wandb.log({'valpred':results,'valtrue':labels})
+#         results = np.array(results).flatten()
+#         labels = np.array(labels).flatten()
+#         valrmse = np.sqrt(np.mean((results - labels)**2))
+#         if np.isinf(valrmse):
+#             valrmse = 1000
+#         valame = np.mean(np.abs(results-labels))
+#         print("Validation",valrmse,valame)
+#         wandb.log({'valrmse': valrmse,'valame':valame})
+#         wandb.log({'valpred':results,'valtrue':labels})
 
 def test_strata(valexamples, model):
     with torch.no_grad():
@@ -418,6 +418,8 @@ def test_strata(valexamples, model):
             output = model(input_tensor)   
             results.append(output.detach().cpu().numpy())
             labels.append(labelvec.detach().cpu().numpy())
+            if idx % 1000:
+                print(idx)
             
         results = np.array(results).flatten()
         labels = np.array(labels).flatten()
