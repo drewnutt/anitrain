@@ -20,8 +20,7 @@ import argparse, pickle
 import itertools
 import math
 from se3cnn.image.gated_block import GatedBlock
-
-
+from SE3ResNet import LargeNetwork, SmallNetwork
 
 parser = argparse.ArgumentParser(description='Progressively train on ANI data (which is in current directory)')
 
@@ -35,6 +34,8 @@ parser.add_argument("--pickle",default="traintest.pickle",type=str)
 parser.add_argument("--molcache",default="traintest.molcache2",type=str)
 parser.add_argument("--train_types",default="train.types",type=str)
 parser.add_argument("--test_types",default="test.types",type=str)
+parser.add_argument("--model_type",choices=['ResNet34','Custom'],default='ResNet34',help='Type of model to use')
+parser.add_argument("--resnet_type",choices=['Small','Large'],default='Large',help='Type of ResNet34 to use from SE3CNN paper')
 parser.add_argument("--num_modules",default=5,type=int,help="number of convolutional modules")
 parser.add_argument("--module_depth",default=1,type=int,help="number of layers in module")
 parser.add_argument("--module_connect",default="straight",choices=('straight','dense','residual'),type=str, help="how module is connected")
@@ -52,9 +53,10 @@ parser.add_argument("--conv_type",default="conv",choices=('conv','se3'),help='ty
 
 args = parser.parse_args()
 
-if args.module_filters_1 or args.module_filters_0 or args.module_filters_2 or args.module_filters_3:
-    args.module_filters = tuple([val if val else 0 for val in [args.module_filters_0, args.module_filters_1, args.module_filters_2, args.module_filters_3] ])
-    print(args.module_filters)
+if args.model_type == 'Custom':
+    if args.module_filters_1 or args.module_filters_0 or args.module_filters_2 or args.module_filters_3:
+        args.module_filters = tuple([val if val else 0 for val in [args.module_filters_0, args.module_filters_1, args.module_filters_2, args.module_filters_3] ])
+        print(args.module_filters)
 
 typemap = {'H': 0, 'C': 1, 'N': 2, 'O': 3} #type indices
 typeradii = [1.0, 1.6, 1.5, 1.4] #not really sure how sensitive the model is to radii
@@ -436,10 +438,13 @@ def test_strata(valexamples, model):
           
 wandb.init(project="anidiff", config=args)
 
-
-
-
 losses = []
+if args.model_type == 'Custom':
+    Network = Net
+elif args.model_type == 'ResNet34':
+    Network = LargeNetwork
+    if args.resnet_type == 'Small':
+        Network = SmallNetwork
 model = Net(dims).to('cuda')
 model.apply(weights_init)
 
