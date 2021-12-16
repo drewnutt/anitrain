@@ -20,7 +20,7 @@ import argparse, pickle
 import itertools
 import math
 from se3cnn.image.gated_block import GatedBlock
-from SE3ResNet import LargeNetwork, SmallNetwork
+# from SE3ResNet import LargeNetwork, SmallNetwork
 
 parser = argparse.ArgumentParser(description='Progressively train on ANI data (which is in current directory)')
 
@@ -39,7 +39,7 @@ parser.add_argument("--resnet_type",choices=['Small','Large'],default='Large',he
 parser.add_argument("--num_modules",default=5,type=int,help="number of convolutional modules")
 parser.add_argument("--module_depth",default=1,type=int,help="number of layers in module")
 parser.add_argument("--module_connect",default="straight",choices=('straight','dense','residual'),type=str, help="how module is connected")
-parser.add_argument("--module_kernel_size",default=3,type=int,help="kernel size of module")
+parser.add_argument("--kernel_size",default=3,type=int,help="kernel size of module")
 parser.add_argument("--module_filters",default=[64],nargs='+',type=int,help="number of filters in each module")
 parser.add_argument("--module_filters_0",type=int,help="number of filters in each module, scalar")
 parser.add_argument("--module_filters_1",type=int,help="number of filters in each module, vect")
@@ -50,7 +50,21 @@ parser.add_argument("--activation_function",default="elu",choices=('elu','relu',
 parser.add_argument("--hidden_size",default=0,type=int,help='size of hidden layer, zero means none')
 parser.add_argument("--pool_type",default="max",choices=('max','ave'),help='type of pool to use between modules')
 parser.add_argument("--conv_type",default="conv",choices=('conv','se3'),help='type of convolution to use, "conv" is normal nn.Conv3d and "se3" is equivariant convolution')
+parser.add_argument("--final_scalar",default=0,choices=(0,1),help='use a final SE3CNN for producing only scalar values')
 
+#for ResNet34 models
+parser.add_argument("--p-drop-conv", type=float, default=None,
+                        help="convolution/capsule dropout probability")
+parser.add_argument("--p-drop-fully", type=float, default=None,
+                    help="fully connected layer dropout probability")
+parser.add_argument("--bandlimit-mode", choices={"conservative", "compromise", "sfcnn"}, default="compromise",
+                    help="bandlimiting heuristic for spherical harmonics")
+parser.add_argument("--SE3-nonlinearity", choices={"gated", "norm"}, default="gated",
+                    help="Which nonlinearity to use for non-scalar capsules")
+parser.add_argument("--normalization", choices={'batch', 'group', 'instance', None}, default='batch',
+                    help="Which nonlinearity to use for non-scalar capsules")
+parser.add_argument("--downsample-by-pooling", action='store_true', default=True,
+                    help="Switches from downsampling by striding to downsampling by pooling")
 args = parser.parse_args()
 
 if args.model_type == 'Custom':
@@ -156,6 +170,7 @@ class Net(nn.Module):
                         for chan, s_nchan, filt in itertools.zip_longest(nchannels, startchannels, filters, fillvalue=0)])
                     activ = self.getGatedBlockActivation(in_nchannels,filters)
                     conv = GatedBlock(in_nchannels, filters, size=ksize, padding=pad, stride=1, activation=activ)
+
                 # inmult += inmultincr
                 self.add_module('conv_%d_%d'%(m,i), conv)
                 module.append(conv)
@@ -187,12 +202,18 @@ class Net(nn.Module):
             else:
                 fmult = tuple([fm * ff for fm, ff in itertools.zip_longest(fmult,args.filter_factor,fillvalue=0)])
             
+        lastmod = []
         last_size = dim**3
         if args.conv_type == 'conv':
             last_size = int(last_size * filters)
         else:
+            if args.final_scalar == 1:
+                filters = tuple([torch.sum(filters),0,0,0])
+                print(f"final_filters:{filters}")
+                conv = GatedBlock(in_nchannels, filters, size=ksize, padding=pad, stride=1, activation=activ) 
+                self.add_module('scalar_conv',conv)
+                lastmod.append(conv)
             last_size = int(sum([(2*l+1)*mult for l, mult in enumerate(filters)])*last_size)
-        lastmod = []
         lastmod.append(View((-1,last_size)))
         
         if args.hidden_size > 0:
@@ -436,12 +457,13 @@ wandb.init(project="anidiff", config=args)
 
 losses = []
 if args.model_type == 'Custom':
-    Network = Net
+    Network = Net(dims)
 elif args.model_type == 'ResNet34':
-    Network = LargeNetwork
     if args.resnet_type == 'Small':
-        Network = SmallNetwork
-model = Net(dims).to('cuda')
+        Network = SmallNetwork(dims[0],1,args)
+    elif args.resnet_type == 'Large':
+        Network = LargeNetwork(dims[0],1,args)
+model = Network.to('cuda')
 model.apply(weights_init)
 
 if args.solver == 'adam':

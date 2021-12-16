@@ -3,24 +3,27 @@
 # MIT License
 # Copyright (c) 2019 Mario Geiger
 
+from functools import partial
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from se3cnn.blocks import GatedBlock
-from se3cnn.blocks import NormBlock
-from se3cnn import SE3BatchNorm
-from se3cnn import SE3Convolution
-from se3cnn import kernel
+from se3cnn.image.gated_block import GatedBlock
+from se3cnn.image.norm_block import NormBlock
 
-from se3cnn.non_linearities import NormRelu
 from se3cnn.non_linearities import NormSoftplus
-from se3cnn.non_linearities import ScalarActivation
-from se3cnn.non_linearities import GatedActivation
+from se3cnn.image.gated_activation import GatedActivation
 
-from functools import partial
+from se3cnn.image.kernel import gaussian_window_wrapper
 
-from se3cnn import kernel
+class ResNet(nn.Module):
+    def __init__(self, *blocks):
+        super().__init__()
+        self.blocks = nn.Sequential(*[block for block in blocks if block is not None])
+
+    def forward(self, x):
+        return self.blocks(x)
 
 class LargeNetwork(ResNet):
     def __init__(self,
@@ -34,7 +37,7 @@ class LargeNetwork(ResNet):
                     [[(32, 32, 32, 32)] * 2] * 6,  # 512 channels
                     [[(64, 64, 64, 64)] * 2] * 2 + [[(64, 64, 64, 64), (1024, 0, 0, 0)]]]  # 1024 channels
         common_params = {
-            'radial_window': partial(kernel.gaussian_window_wrapper,
+            'radial_window': partial(gaussian_window_wrapper,
                                      mode=args.bandlimit_mode, border_dist=0, sigma=0.6),
             'batch_norm_momentum': 0.01,
             # TODO: probability needs to be adapted to capsule order
@@ -73,7 +76,7 @@ class SmallNetwork(ResNet):
                     # [[(8, 8, 8, 8)] * 2] * 2 + [[(8, 8, 8, 8), (128, 0, 0, 0)]]]  # 256 channels
                     [[(16, 16, 16, 16)] * 2] * 2 + [[(16, 16, 16, 16), (256, 0, 0, 0)]]]  # 256 channels
         common_params = {
-            'radial_window': partial(kernel.gaussian_window_wrapper,
+            'radial_window': partial(gaussian_window_wrapper,
                                      mode=args.bandlimit_mode, border_dist=0, sigma=0.6),
             'batch_norm_momentum': 0.01,
             # TODO: probability needs to be adapted to capsule order
@@ -109,77 +112,6 @@ class Merge(nn.Module):
 class AvgSpacial(nn.Module):
     def forward(self, inp):
         return inp.view(inp.size(0), inp.size(1), -1).mean(-1)
-
-
-class ResBlock(nn.Module):
-    def __init__(self, channels_in, channels_out, size=3, stride=1,
-                 downsample_by_pooling=False,
-                 conv_dropout_p=None):
-        super().__init__()
-
-        channels = [channels_in] + channels_out
-
-        self.layers = []
-        conv_stride = 1 if downsample_by_pooling else stride
-        for i in range(len(channels) - 1):
-            self.layers += [
-                nn.BatchNorm3d(channels[i]),
-                nn.Conv3d(channels[i], channels[i + 1],
-                          kernel_size=size,
-                          padding=size // 2,
-                          stride=conv_stride if i == 0 else 1,
-                          bias=False),
-                # nn.BatchNorm3d(channels[i + 1])
-            ]
-            if conv_dropout_p is not None:
-                self.layers.append(nn.Dropout3d(p=conv_dropout_p, inplace=True))
-            if downsample_by_pooling and i == 0 and stride > 1:
-                self.layers.append(nn.AvgPool3d(kernel_size=size,
-                                                padding=size//2,
-                                                stride=stride))
-            if (i + 1) < len(channels) - 1:
-                self.layers += [nn.ReLU(inplace=True)]
-        self.layers = nn.Sequential(*self.layers)
-
-        self.shortcut = None
-        if len(channels_out) > 1:
-            if channels_in == channels_out[-1] and stride == 1:
-                self.shortcut = lambda x: x
-            else:
-                self.shortcut = [
-                    nn.BatchNorm3d(channels[0]),
-                    nn.Conv3d(channels[0], channels[-1],
-                              kernel_size=1,
-                              padding=0,
-                              stride=conv_stride,
-                              bias=False),
-                    # nn.BatchNorm3d(channels[-1])
-                    ]
-                if conv_dropout_p is not None:
-                    self.shortcut.append(
-                        nn.Dropout3d(p=conv_dropout_p, inplace=True))
-                if downsample_by_pooling and stride > 1:
-                    self.shortcut.append(nn.AvgPool3d(kernel_size=size,
-                                                      padding=size // 2,
-                                                      stride=stride))
-                self.shortcut = nn.Sequential(*self.shortcut)
-
-        self.activation = nn.ReLU(inplace=True)
-
-        # initialize
-        for module in self.modules():
-            if isinstance(module, nn.Conv3d):
-                nn.init.xavier_normal(module.weight.data)
-            elif isinstance(module, nn.BatchNorm3d):
-                module.weight.data.fill_(1)
-                module.bias.data.zero_()
-
-    def forward(self, x):
-        out = self.layers(x)
-        if self.shortcut is not None:
-            out += self.shortcut(x)
-        out = self.activation(out)
-        return out
 
 
 class SE3GatedResBlock(nn.Module):
@@ -361,14 +293,6 @@ class OuterBlock(nn.Module):
         return out
 
 
-class ResNet(nn.Module):
-    def __init__(self, *blocks):
-        super().__init__()
-        self.blocks = nn.Sequential(*[block for block in blocks if block is not None])
-
-    def forward(self, x):
-        return self.blocks(x)
-
 
 
 class NonlinearityBlock(nn.Module):
@@ -384,20 +308,3 @@ class NonlinearityBlock(nn.Module):
         self.conv_block = conv_block(features_in, features_out, **kwargs)
     def forward(self, x):
         return self.conv_block(x)
-
-
-class SkipSumBlock(nn.Module):
-    ''' skip connection module for UNets
-        takes a feature map from the encoder pathway and merges it with the decoder feature map by summation
-        the encoder feature map is convolved before being added to allow for aligned features
-        it is assumed that the shape of both feature maps is equal
-    '''
-    def __init__(self, features, **common_params):
-        super(SkipSumBlock, self).__init__()
-        raise NotImplementedError('TODO: nonlinearity only after summation')
-        # self.skip_conv = NonlinearityBlock(features, features, **common_params)
-    def forward(self, enc, dec):
-        raise NotImplementedError('TODO: nonlinearity only after summation')
-        # assert enc.shape == dec.shape
-        # enc_res = self.skip_conv(enc)
-        # return enc_res + dec
