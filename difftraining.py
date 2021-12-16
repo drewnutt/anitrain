@@ -20,7 +20,7 @@ import argparse, pickle
 import itertools
 import math
 from se3cnn.image.gated_block import GatedBlock
-# from SE3ResNet import LargeNetwork, SmallNetwork
+from SE3ResNet import LargeNetwork, SmallNetwork
 
 parser = argparse.ArgumentParser(description='Progressively train on ANI data (which is in current directory)')
 
