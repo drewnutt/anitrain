@@ -77,7 +77,9 @@ typeradii = [1.0, 1.6, 1.5, 1.4] #not really sure how sensitive the model is to 
 
 
 #load data
-batch_size = 8
+batch_size = 16
+if args.module_connect == 'dense':
+    batch_size = 8
 typer = molgrid.SubsettedGninaTyper([0,2,6,10],catchall=False)
 examples = molgrid.ExampleProvider(typer,molgrid.NullIndexTyper(),recmolcache=args.molcache, shuffle=True,default_batch_size=batch_size, iteration_scheme=molgrid.IterationScheme.LargeEpoch)
 examples.populate(args.train_types)
@@ -85,16 +87,16 @@ valexamples = molgrid.ExampleProvider(typer,molgrid.NullIndexTyper(),recmolcache
 valexamples.populate(args.test_types)
 # (train, test) = pickle.load(open(args.pickle,'rb'))
 
-def load_examples(T):
-    examples = []
-    for coord, types, energy, diff in T:
-        radii = np.array([typeradii[int(index)] for index in types], dtype=np.float32)
-        c = molgrid.CoordinateSet(coord, types, radii,4)
-        ex = molgrid.Example()
-        ex.coord_sets.append(c)
-        ex.labels.append(diff)        
-        examples.append(ex)
-    return examples
+# def load_examples(T):
+#     examples = []
+#     for coord, types, energy, diff in T:
+#         radii = np.array([typeradii[int(index)] for index in types], dtype=np.float32)
+#         c = molgrid.CoordinateSet(coord, types, radii,4)
+#         ex = molgrid.Example()
+#         ex.coord_sets.append(c)
+#         ex.labels.append(diff)        
+#         examples.append(ex)
+#     return examples
   
 # examples = load_examples(train)
 # del train
@@ -369,7 +371,7 @@ def train_strata(strata, model, optimizer, losses, maxepoch, stop=20000):
             # if len(batch) < batch_size: #wrap last batch
             #     batch += strata[:batch_size-len(batch)]
             # batch = molgrid.ExampleVec(batch)
-            batch.extract_label(0,labels) # extract first label (there is only one in this case)
+            batch.extract_label(1,labels) # extract second label 
 
             gmaker.forward(batch, input_tensor, 2, random_rotation=True)  #create grid; randomly translate/rotate molecule
             output = model(input_tensor) #run model
@@ -435,12 +437,14 @@ def test_strata(valexamples, model):
 #            if len(batch) < batch_size: #wrap last batch
 #                batch += valexamples[:batch_size-len(batch)]
 #            batch = molgrid.ExampleVec(batch)
-            batch.extract_label(0,labelvec) # extract first label (there is only one in this case)
+            batch.extract_label(1,labelvec) # extract second label
 
             gmaker.forward(batch, input_tensor, 2, random_rotation=True)  #create grid; randomly translate/rotate molecule
             output = model(input_tensor)   
             results.append(output.detach().cpu().numpy())
             labels.append(labelvec.detach().cpu().numpy())
+            if idx % 1000 == 0:
+                print(idx)
             
         results = np.array(results).flatten()
         labels = np.array(labels).flatten()
@@ -476,7 +480,9 @@ scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=1, gamma=0.1)
 
 wandb.watch(model)
 
+print("start testing")
 test_strata(valexamples, model)
+print("done testing")
                 
 #train on full training set, start stepping the learning rate
 for i in range(3):
