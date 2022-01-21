@@ -4,6 +4,7 @@
 # Copyright (c) 2019 Mario Geiger
 
 from functools import partial
+import math
 
 import torch
 import torch.nn as nn
@@ -25,11 +26,61 @@ class ResNet(nn.Module):
     def forward(self, x):
         return self.blocks(x)
 
+class CustomResNet(ResNet):
+    def __init__(self,
+                 n_input,
+                 n_output,
+                 args,
+                 module_filters=(8,8,8,8),
+                 filter_factor=2,
+                 final_size=None,
+                 size_resblocks = [3,4,6,2]
+                 ):
+
+        if final_size is None: # Automatically set the final size to the penultimate conv layers sizes * their multiplicity
+            final_size = int(sum([math.ceil((filter_factor**3) * mf*(2*idx+1)) for idx, mf in enumerate(module_filters)]))
+        assert type(module_filters) == tuple, 'needs to be a tuple of length at least 1'
+        assert type(final_size) == int, 'final output needs to be an integer'
+        assert len(size_resblocks) == 3, 'need the size for 4 resblocks'
+        
+
+        features = [[[module_filters]],
+                    [[module_filters] * 2] * size_resblocks[0],
+                    [[tuple([math.ceil(filter_factor * mf) for mf in module_filters])] * 2] * size_resblocks[1],
+                    [[tuple([math.ceil((filter_factor ** 2) * mf) for mf in module_filters])] * 2] * size_resblocks[2],
+                    [[tuple([math.ceil((filter_factor ** 3) * mf) for mf in module_filters])] * 2] * size_resblocks[3] 
+                            + [[tuple([math.ceil((filter_factor ** 3) * mf) for mf in module_filters]), (final_size,0,0,0)]]]
+        common_params = {
+            'radial_window': partial(gaussian_window_wrapper,
+                                     mode=args.bandlimit_mode, border_dist=0, sigma=0.6),
+            'batch_norm_momentum': 0.01,
+            # TODO: probability needs to be adapted to capsule order
+            'capsule_dropout_p': args.p_drop_conv,  # drop probability of whole capsules
+            'downsample_by_pooling': args.downsample_by_pooling,
+            'normalization': args.normalization
+        }
+        if args.SE3_nonlinearity == 'gated':
+            res_block = SE3GatedResBlock
+        else:
+            res_block = SE3NormResBlock
+        global OuterBlock
+        OuterBlock = partial(OuterBlock,
+                             res_block=partial(res_block, **common_params))
+        super().__init__(
+            OuterBlock((n_input,),          features[0], size=7),
+            OuterBlock(features[0][-1][-1], features[1], size=args.kernel_size, stride=1),
+            OuterBlock(features[1][-1][-1], features[2], size=args.kernel_size, stride=2),
+            OuterBlock(features[2][-1][-1], features[3], size=args.kernel_size, stride=2),
+            OuterBlock(features[3][-1][-1], features[4], size=args.kernel_size, stride=2),
+            AvgSpacial(),
+            nn.Dropout(p=args.p_drop_fully, inplace=True) if args.p_drop_fully is not None else None,
+            nn.Linear(features[4][-1][-1][0], n_output))
 class LargeNetwork(ResNet):
     def __init__(self,
                  n_input,
                  n_output,
-                 args):
+                 args,
+                 ):
 
         features = [[[(8,  8,  8,  8)]],          # 128 channels
                     [[(8,  8,  8,  8)] * 2] * 3,  # 128 channels
