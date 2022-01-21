@@ -20,7 +20,7 @@ import argparse, pickle
 import itertools
 import math
 from se3cnn.image.gated_block import GatedBlock
-from SE3ResNet import LargeNetwork, SmallNetwork
+from SE3ResNet import LargeNetwork, SmallNetwork,CustomResNet
 
 parser = argparse.ArgumentParser(description='Progressively train on ANI data (which is in current directory)')
 
@@ -35,7 +35,7 @@ parser.add_argument("--molcache",default="traintest.molcache2",type=str)
 parser.add_argument("--train_types",default="train.types",type=str)
 parser.add_argument("--test_types",default="test.types",type=str)
 parser.add_argument("--model_type",choices=['ResNet34','Custom'],default='ResNet34',help='Type of model to use')
-parser.add_argument("--resnet_type",choices=['Small','Large'],default='Large',help='Type of ResNet34 to use from SE3CNN paper')
+parser.add_argument("--resnet_type",choices=['Small','Large','Custom'],default='Large',help='Type of ResNet34 to use from SE3CNN paper')
 parser.add_argument("--num_modules",default=5,type=int,help="number of convolutional modules")
 parser.add_argument("--module_depth",default=1,type=int,help="number of layers in module")
 parser.add_argument("--module_connect",default="straight",choices=('straight','dense','residual'),type=str, help="how module is connected")
@@ -50,7 +50,7 @@ parser.add_argument("--activation_function",default="elu",choices=('elu','relu',
 parser.add_argument("--hidden_size",default=0,type=int,help='size of hidden layer, zero means none')
 parser.add_argument("--pool_type",default="max",choices=('max','ave'),help='type of pool to use between modules')
 parser.add_argument("--conv_type",default="conv",choices=('conv','se3'),help='type of convolution to use, "conv" is normal nn.Conv3d and "se3" is equivariant convolution')
-parser.add_argument("--final_scalar",default=0,choices=(0,1),help='use a final SE3CNN for producing only scalar values')
+parser.add_argument("--final_scalar",type=int,default=0,choices=(0,1),help='use a final SE3CNN for producing only scalar values')
 
 #for ResNet34 models
 parser.add_argument("--p-drop-conv", type=float, default=None,
@@ -65,6 +65,8 @@ parser.add_argument("--normalization", choices={'batch', 'group', 'instance', No
                     help="Which nonlinearity to use for non-scalar capsules")
 parser.add_argument("--downsample-by-pooling", action='store_true', default=True,
                     help="Switches from downsampling by striding to downsampling by pooling")
+parser.add_argument("--final_size",default=None,type=int,
+                    help="Only used with custom ResNets, the final size of the last convolution which outputs only scalar values. Defaults to sum((NumberOfFilters)*(Multiplicity))")
 args = parser.parse_args()
 
 if args.model_type == 'Custom':
@@ -78,8 +80,12 @@ typeradii = [1.0, 1.6, 1.5, 1.4] #not really sure how sensitive the model is to 
 
 #load data
 batch_size = 16
-if args.module_connect == 'dense':
-    batch_size = 8
+if args.model_type == 'Custom':
+    if args.module_connect == 'dense':
+        batch_size = 8
+elif args.model_type == 'ResNet34':
+    if args.resnet_type == 'Small':
+        batch_size = 64
 typer = molgrid.SubsettedGninaTyper([0,2,6,10],catchall=False)
 examples = molgrid.ExampleProvider(typer,molgrid.NullIndexTyper(),recmolcache=args.molcache, shuffle=True,default_batch_size=batch_size, iteration_scheme=molgrid.IterationScheme.LargeEpoch)
 examples.populate(args.train_types)
@@ -119,7 +125,7 @@ class Net(nn.Module):
         self.residuals = []
         nchannels = dims[0]
         dim = dims[1]
-        ksize = args.module_kernel_size
+        ksize = args.kernel_size
         pad = ksize//2
         fmult = 1
         func = F.elu
@@ -210,7 +216,7 @@ class Net(nn.Module):
             last_size = int(last_size * filters)
         else:
             if args.final_scalar == 1:
-                filters = tuple([torch.sum(filters),0,0,0])
+                filters = tuple([torch.sum(torch.tensor(filters)),0,0,0])
                 print(f"final_filters:{filters}")
                 conv = GatedBlock(in_nchannels, filters, size=ksize, padding=pad, stride=1, activation=activ) 
                 self.add_module('scalar_conv',conv)
@@ -467,6 +473,11 @@ elif args.model_type == 'ResNet34':
         Network = SmallNetwork(dims[0],1,args)
     elif args.resnet_type == 'Large':
         Network = LargeNetwork(dims[0],1,args)
+    elif args.resnet_type == 'Custom':
+        Network = LargeNetwork(dims[0],1,args,
+                module_filters=tuple(args.module_filters),
+                filter_factor = args.filter_factor[0],
+                final_size=args.final_size)
 model = Network.to('cuda')
 model.apply(weights_init)
 
