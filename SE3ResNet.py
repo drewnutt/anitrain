@@ -41,7 +41,7 @@ class CustomResNet(ResNet):
             final_size = int(sum([math.ceil((filter_factor**3) * mf*(2*idx+1)) for idx, mf in enumerate(module_filters)]))
         assert type(module_filters) == tuple, 'needs to be a tuple of length at least 1'
         assert type(final_size) == int, 'final output needs to be an integer'
-        assert len(size_resblocks) == 3, 'need the size for 4 resblocks'
+        assert len(size_resblocks) == 4, 'need the size for 4 resblocks'
         
 
         features = [[[module_filters]],

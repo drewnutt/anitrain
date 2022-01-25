@@ -474,7 +474,7 @@ elif args.model_type == 'ResNet34':
     elif args.resnet_type == 'Large':
         Network = LargeNetwork(dims[0],1,args)
     elif args.resnet_type == 'Custom':
-        Network = LargeNetwork(dims[0],1,args,
+        Network = CustomResNet(dims[0],1,args,
                 module_filters=tuple(args.module_filters),
                 filter_factor = args.filter_factor[0],
                 final_size=args.final_size)
