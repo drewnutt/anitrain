@@ -22,93 +22,61 @@ import math
 from se3cnn.image.gated_block import GatedBlock
 from SE3ResNet import LargeNetwork, SmallNetwork,CustomResNet
 
-parser = argparse.ArgumentParser(description='Progressively train on ANI data (which is in current directory)')
+def parse_arguments():
+    parser = argparse.ArgumentParser(description='Progressively train on ANI data (which is in current directory)')
 
-parser.add_argument("--maxepoch",default=100,type=int,help="Number of epochs before moving on")
-parser.add_argument("--stop",default=20000, type=int, help="Number of iterations without improvement before moving on")
-parser.add_argument("--lr",default=0.001,type=float, help="Initial learning rate")
-parser.add_argument("--resolution",default=0.25,type=float, help="Grid resolution")
-parser.add_argument("--clip",default=10,type=float, help="Gradient clipping")
-parser.add_argument("--solver",default="adam",choices=('adam','sgd'),type=str, help="solver to use (adam|sgd)")
-parser.add_argument("--pickle",default="traintest.pickle",type=str)
-parser.add_argument("--molcache",default="traintest.molcache2",type=str)
-parser.add_argument("--train_types",default="train.types",type=str)
-parser.add_argument("--test_types",default="test.types",type=str)
-parser.add_argument("--model_type",choices=['ResNet34','Custom'],default='ResNet34',help='Type of model to use')
-parser.add_argument("--resnet_type",choices=['Small','Large','Custom'],default='Large',help='Type of ResNet34 to use from SE3CNN paper')
-parser.add_argument("--num_modules",default=5,type=int,help="number of convolutional modules")
-parser.add_argument("--module_depth",default=1,type=int,help="number of layers in module")
-parser.add_argument("--module_connect",default="straight",choices=('straight','dense','residual'),type=str, help="how module is connected")
-parser.add_argument("--kernel_size",default=3,type=int,help="kernel size of module")
-parser.add_argument("--module_filters",default=[64],nargs='+',type=int,help="number of filters in each module")
-parser.add_argument("--module_filters_0",type=int,help="number of filters in each module, scalar")
-parser.add_argument("--module_filters_1",type=int,help="number of filters in each module, vect")
-parser.add_argument("--module_filters_2",type=int,help="number of filters in each module, mult2")
-parser.add_argument("--module_filters_3",type=int,help="number of filters in each module, mult3")
-parser.add_argument("--filter_factor",default=[2],nargs='+',type=float,help="set filters to this raised to the current module index")
-parser.add_argument("--activation_function",default="elu",choices=('elu','relu','sigmoid'),help='activation function')
-parser.add_argument("--hidden_size",default=0,type=int,help='size of hidden layer, zero means none')
-parser.add_argument("--pool_type",default="max",choices=('max','ave'),help='type of pool to use between modules')
-parser.add_argument("--conv_type",default="conv",choices=('conv','se3'),help='type of convolution to use, "conv" is normal nn.Conv3d and "se3" is equivariant convolution')
-parser.add_argument("--final_scalar",type=int,default=0,choices=(0,1),help='use a final SE3CNN for producing only scalar values')
+    parser.add_argument("--maxepoch",default=100,type=int,help="Number of epochs before moving on")
+    parser.add_argument("--stop",default=20000, type=int, help="Number of iterations without improvement before moving on")
+    parser.add_argument("--lr",default=0.001,type=float, help="Initial learning rate")
+    parser.add_argument("--resolution",default=0.25,type=float, help="Grid resolution")
+    parser.add_argument("--clip",default=10,type=float, help="Gradient clipping")
+    parser.add_argument("--solver",default="adam",choices=('adam','sgd'),type=str, help="solver to use (adam|sgd)")
+    parser.add_argument("--pickle",default="traintest.pickle",type=str)
+    parser.add_argument("--molcache",default="traintest.molcache2",type=str)
+    parser.add_argument("--train_types",default="train.types",type=str)
+    parser.add_argument("--test_types",default="test.types",type=str)
+    parser.add_argument("--model_type",choices=['ResNet34','Custom'],default='ResNet34',help='Type of model to use')
+    parser.add_argument("--resnet_type",choices=['Small','Large','Custom'],default='Large',help='Type of ResNet34 to use from SE3CNN paper')
+    parser.add_argument("--num_modules",default=5,type=int,help="number of convolutional modules")
+    parser.add_argument("--module_depth",default=1,type=int,help="number of layers in module")
+    parser.add_argument("--module_connect",default="straight",choices=('straight','dense','residual'),type=str, help="how module is connected")
+    parser.add_argument("--kernel_size",default=3,type=int,help="kernel size of module")
+    parser.add_argument("--module_filters",default=[64],nargs='+',type=int,help="number of filters in each module")
+    parser.add_argument("--module_filters_0",type=int,help="number of filters in each module, scalar")
+    parser.add_argument("--module_filters_1",type=int,help="number of filters in each module, vect")
+    parser.add_argument("--module_filters_2",type=int,help="number of filters in each module, mult2")
+    parser.add_argument("--module_filters_3",type=int,help="number of filters in each module, mult3")
+    parser.add_argument("--filter_factor",default=[2],nargs='+',type=float,help="set filters to this raised to the current module index")
+    parser.add_argument("--activation_function",default="elu",choices=('elu','relu','sigmoid'),help='activation function')
+    parser.add_argument("--hidden_size",default=0,type=int,help='size of hidden layer, zero means none')
+    parser.add_argument("--pool_type",default="max",choices=('max','ave'),help='type of pool to use between modules')
+    parser.add_argument("--conv_type",default="conv",choices=('conv','se3'),help='type of convolution to use, "conv" is normal nn.Conv3d and "se3" is equivariant convolution')
+    parser.add_argument("--final_scalar",type=int,default=0,choices=(0,1),help='use a final SE3CNN for producing only scalar values')
 
-#for ResNet34 models
-parser.add_argument("--p-drop-conv", type=float, default=None,
-                        help="convolution/capsule dropout probability")
-parser.add_argument("--p-drop-fully", type=float, default=None,
-                    help="fully connected layer dropout probability")
-parser.add_argument("--bandlimit-mode", choices={"conservative", "compromise", "sfcnn"}, default="compromise",
-                    help="bandlimiting heuristic for spherical harmonics")
-parser.add_argument("--SE3-nonlinearity", choices={"gated", "norm"}, default="gated",
-                    help="Which nonlinearity to use for non-scalar capsules")
-parser.add_argument("--normalization", choices={'batch', 'group', 'instance', None}, default='batch',
-                    help="Which nonlinearity to use for non-scalar capsules")
-parser.add_argument("--downsample-by-pooling", action='store_true', default=True,
-                    help="Switches from downsampling by striding to downsampling by pooling")
-parser.add_argument("--final_size",default=None,type=int,
-                    help="Only used with custom ResNets, the final size of the last convolution which outputs only scalar values. Defaults to sum((NumberOfFilters)*(Multiplicity))")
-args = parser.parse_args()
+    #for ResNet34 models
+    parser.add_argument("--p-drop-conv", type=float, default=None,
+                            help="convolution/capsule dropout probability")
+    parser.add_argument("--p-drop-fully", type=float, default=None,
+                        help="fully connected layer dropout probability")
+    parser.add_argument("--bandlimit-mode", choices={"conservative", "compromise", "sfcnn"}, default="compromise",
+                        help="bandlimiting heuristic for spherical harmonics")
+    parser.add_argument("--SE3-nonlinearity", choices={"gated", "norm"}, default="gated",
+                        help="Which nonlinearity to use for non-scalar capsules")
+    parser.add_argument("--normalization", choices={'batch', 'group', 'instance', None}, default='batch',
+                        help="Which nonlinearity to use for non-scalar capsules")
+    parser.add_argument("--downsample-by-pooling", action='store_true', default=True,
+                        help="Switches from downsampling by striding to downsampling by pooling")
+    parser.add_argument("--final_size",default=None,type=int,
+                        help="Only used with custom ResNets, the final size of the last convolution which outputs only scalar values. Defaults to sum((NumberOfFilters)*(Multiplicity))")
+    args = parser.parse_args()
 
-if args.model_type == 'Custom':
-    if args.module_filters_1 or args.module_filters_0 or args.module_filters_2 or args.module_filters_3:
-        args.module_filters = tuple([val if val else 0 for val in [args.module_filters_0, args.module_filters_1, args.module_filters_2, args.module_filters_3] ])
-        print(args.module_filters)
+    if args.model_type == 'Custom':
+        if args.module_filters_1 or args.module_filters_0 or args.module_filters_2 or args.module_filters_3:
+            args.module_filters = tuple([val if val else 0 for val in [args.module_filters_0, args.module_filters_1, args.module_filters_2, args.module_filters_3] ])
+            print(args.module_filters)
 
-typemap = {'H': 0, 'C': 1, 'N': 2, 'O': 3} #type indices
-typeradii = [1.0, 1.6, 1.5, 1.4] #not really sure how sensitive the model is to radii
+    return args
 
-
-#load data
-batch_size = 16
-if args.model_type == 'Custom':
-    if args.module_connect == 'dense':
-        batch_size = 8
-elif args.model_type == 'ResNet34':
-    if args.resnet_type == 'Small':
-        batch_size = 64
-typer = molgrid.SubsettedGninaTyper([0,2,6,10],catchall=False)
-examples = molgrid.ExampleProvider(typer,molgrid.NullIndexTyper(),recmolcache=args.molcache, shuffle=True,default_batch_size=batch_size, iteration_scheme=molgrid.IterationScheme.LargeEpoch)
-examples.populate(args.train_types)
-valexamples = molgrid.ExampleProvider(typer,molgrid.NullIndexTyper(),recmolcache=args.molcache,default_batch_size=batch_size, iteration_scheme=molgrid.IterationScheme.LargeEpoch)
-valexamples.populate(args.test_types)
-# (train, test) = pickle.load(open(args.pickle,'rb'))
-
-# def load_examples(T):
-#     examples = []
-#     for coord, types, energy, diff in T:
-#         radii = np.array([typeradii[int(index)] for index in types], dtype=np.float32)
-#         c = molgrid.CoordinateSet(coord, types, radii,4)
-#         ex = molgrid.Example()
-#         ex.coord_sets.append(c)
-#         ex.labels.append(diff)        
-#         examples.append(ex)
-#     return examples
-  
-# examples = load_examples(train)
-# del train
-# valexamples = load_examples(test)
-# del test
-  
 
 class View(nn.Module):
     def __init__(self, shape):        
@@ -321,54 +289,8 @@ def weights_init(m):
         a = math.sqrt(3.0) * std
         init._no_grad_uniform_(m.conv.kernel.weight.data,-a,a)
 
-gmaker = molgrid.GridMaker(resolution=args.resolution, dimension = 16-args.resolution)
-dims = gmaker.grid_dimensions(4) # 4 types
-tensor_shape = (batch_size,)+dims  #shape of batched input
-
-
-#allocate tensors
-input_tensor = torch.zeros(tensor_shape, dtype=torch.float32, device='cuda')
-labels = torch.zeros(batch_size, dtype=torch.float32, device='cuda')
-
-
-TRAIL = 100
-
-# def train_strata(strata, model, optimizer, losses, maxepoch, stop=20000):
-#     bestloss = 100000 #best trailing average loss we've seen so far in this strata
-#     bestindex = len(losses) #position    
-#     for _ in range(maxepoch):  #do at most MAXEPOCH epochs, but should bail earlier
-#         np.random.shuffle(strata)
-#         for pos in range(0,len(strata),batch_size):
-#             batch = strata[pos:pos+batch_size]
-#             if len(batch) < batch_size: #wrap last batch
-#                 batch += strata[:batch_size-len(batch)]
-#             batch = molgrid.ExampleVec(batch)
-#             batch.extract_label(0,labels) # extract first label (there is only one in this case)
-
-#             gmaker.forward(batch, input_tensor, 2, random_rotation=True)  #create grid; randomly translate/rotate molecule
-#             output = model(input_tensor) #run model
-#             loss = F.smooth_l1_loss(output.flatten(),labels.flatten())
-#             loss.backward()
-            
-#             if args.clip > 0:
-#               nn.utils.clip_grad_norm_(model.parameters(),args.clip)
-
-#             optimizer.step()
-#             losses.append(float(loss))
-#             trailing = np.mean(losses[-TRAIL:])
-            
-#             if trailing < bestloss:
-#                 bestloss = trailing
-#                 bestindex = len(losses)
-#                 torch.save(model.state_dict(), os.path.join(wandb.run.dir, 'model_better_%d_%d_%f.pt'%(_,pos,bestloss)))
-#             if (pos % 100) == 0: 
-#                 wandb.log({'loss': float(loss),'trailing':trailing,'bestloss':bestloss,'stratasize':len(strata),'lr':optimizer.param_groups[0]['lr']})
-            
-#             if len(losses)-bestindex > stop:
-#                 return True # "converged"
-#     return False
-
-def train_strata(strata, model, optimizer, losses, maxepoch, stop=20000):
+def train_strata(strata, gmaker, model, optimizer, losses, maxepoch, batch_size, input_tensor, stop=20000):
+    labels = torch.zeros(batch_size, dtype=torch.float32, device='cuda')
     bestloss = 100000 #best trailing average loss we've seen so far in this strata
     bestindex = len(losses) #position    
     for _ in range(maxepoch):  #do at most MAXEPOCH epochs, but should bail earlier
@@ -402,36 +324,7 @@ def train_strata(strata, model, optimizer, losses, maxepoch, stop=20000):
                 return True # "converged"
     return False
 
-
-# def test_strata(valexamples, model):
-#     with torch.no_grad():
-#         model.eval()
-#         results = []
-#         labels = []
-#         labelvec = torch.zeros(batch_size, dtype=torch.float32, device='cuda')
-#         for pos in range(0,len(valexamples),batch_size):
-#             batch = valexamples[pos:pos+batch_size]
-#             if len(batch) < batch_size: #wrap last batch
-#                 batch += valexamples[:batch_size-len(batch)]
-#             batch = molgrid.ExampleVec(batch)
-#             batch.extract_label(0,labelvec) # extract first label (there is only one in this case)
-
-#             gmaker.forward(batch, input_tensor, 2, random_rotation=True)  #create grid; randomly translate/rotate molecule
-#             output = model(input_tensor)   
-#             results.append(output.detach().cpu().numpy())
-#             labels.append(labelvec.detach().cpu().numpy())
-            
-#         results = np.array(results).flatten()
-#         labels = np.array(labels).flatten()
-#         valrmse = np.sqrt(np.mean((results - labels)**2))
-#         if np.isinf(valrmse):
-#             valrmse = 1000
-#         valame = np.mean(np.abs(results-labels))
-#         print("Validation",valrmse,valame)
-#         wandb.log({'valrmse': valrmse,'valame':valame})
-#         wandb.log({'valpred':results,'valtrue':labels})
-
-def test_strata(valexamples, model):
+def test_strata(valexamples, gmaker, model, batch_size, input_tensor):
     with torch.no_grad():
         model.eval()
         results = []
@@ -462,47 +355,75 @@ def test_strata(valexamples, model):
         wandb.log({'valrmse': valrmse,'valame':valame})
         wandb.log({'valpred':results,'valtrue':labels})
         
-          
-wandb.init(project="anidiff", config=args)
+def main(args):          
+    typemap = {'H': 0, 'C': 1, 'N': 2, 'O': 3} #type indices
+    typeradii = [1.0, 1.6, 1.5, 1.4] #not really sure how sensitive the model is to radii
 
-losses = []
-if args.model_type == 'Custom':
-    Network = Net(dims)
-elif args.model_type == 'ResNet34':
-    if args.resnet_type == 'Small':
-        Network = SmallNetwork(dims[0],1,args)
-    elif args.resnet_type == 'Large':
-        Network = LargeNetwork(dims[0],1,args)
-    elif args.resnet_type == 'Custom':
-        Network = CustomResNet(dims[0],1,args,
-                module_filters=tuple(args.module_filters),
-                filter_factor = args.filter_factor[0],
-                final_size=args.final_size)
-model = Network.to('cuda')
-model.apply(weights_init)
+    wandb.init(project="anidiff", config=args,resume=True)
 
-if args.solver == 'adam':
-    optimizer = optim.Adam(model.parameters(), lr=args.lr)
-else:
-    optimizer = optim.SGD(model.parameters(), lr=args.lr)
-    
-scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=1, gamma=0.1)
+    batch_size = 16
+    if args.model_type == 'Custom':
+        if args.module_connect == 'dense':
+            batch_size = 8
+    elif args.model_type == 'ResNet34':
+        if args.resnet_type == 'Small':
+            batch_size = 64
 
+    print("Sucking in data")
+    typer = molgrid.SubsettedGninaTyper([0,2,6,10],catchall=False)
+    examples = molgrid.ExampleProvider(typer,molgrid.NullIndexTyper(),recmolcache=args.molcache, shuffle=True,default_batch_size=batch_size, iteration_scheme=molgrid.IterationScheme.LargeEpoch)
+    examples.populate(args.train_types)
+    valexamples = molgrid.ExampleProvider(typer,molgrid.NullIndexTyper(),recmolcache=args.molcache,default_batch_size=batch_size, iteration_scheme=molgrid.IterationScheme.LargeEpoch)
+    valexamples.populate(args.test_types)
+    print("Done building datasets")
 
-wandb.watch(model)
-
-print("start testing")
-test_strata(valexamples, model)
-print("done testing")
-                
-#train on full training set, start stepping the learning rate
-for i in range(3):
-    train_strata(examples, model, optimizer, losses, args.maxepoch, args.stop)
-    torch.save(model.state_dict(), os.path.join(wandb.run.dir, 'model_refine%d.pt'%i))
-    scheduler.step()
-    test_strata(valexamples, model)
+    gmaker = molgrid.GridMaker(resolution=args.resolution, dimension = 16-args.resolution)
+    dims = gmaker.grid_dimensions(4) # 4 types
+    tensor_shape = (batch_size,)+dims  #shape of batched input
 
 
+    #allocate tensors
+    input_tensor = torch.zeros(tensor_shape, dtype=torch.float32, device='cuda')
 
 
+    TRAIL = 100
 
+    losses = []
+    if args.model_type == 'Custom':
+        Network = Net(dims)
+    elif args.model_type == 'ResNet34':
+        if args.resnet_type == 'Small':
+            Network = SmallNetwork(dims[0],1,args)
+        elif args.resnet_type == 'Large':
+            Network = LargeNetwork(dims[0],1,args)
+        elif args.resnet_type == 'Custom':
+            Network = CustomResNet(dims[0],1,args,
+                    module_filters=tuple(args.module_filters),
+                    filter_factor = args.filter_factor[0],
+                    final_size=args.final_size)
+    model = Network.to('cuda')
+    model.apply(weights_init)
+
+    if args.solver == 'adam':
+        optimizer = optim.Adam(model.parameters(), lr=args.lr)
+    else:
+        optimizer = optim.SGD(model.parameters(), lr=args.lr)
+        
+    scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=1, gamma=0.1)
+
+    wandb.watch(model)
+
+    print("start testing")
+    test_strata(valexamples, model,batch_size, input_tensor)
+    print("done testing")
+                    
+    #train on full training set, start stepping the learning rate
+    for i in range(3):
+        train_strata(examples, gmaker, model, optimizer, losses, args.maxepoch, batch_size, input_tensor, args.stop)
+        torch.save(model.state_dict(), os.path.join(wandb.run.dir, 'model_refine%d.pt'%i))
+        scheduler.step()
+        test_strata(valexamples, gmaker, model, batch_size, input_tensor)
+
+if __name__ == '__main__':
+    arguments = parse_arguments()
+    main(arguments)
