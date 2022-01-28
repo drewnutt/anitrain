@@ -414,7 +414,7 @@ def main(args):
     wandb.watch(model)
 
     print("start testing")
-    test_strata(valexamples, model,batch_size, input_tensor)
+    test_strata(valexamples, gmaker, model, batch_size, input_tensor)
     print("done testing")
                     
     #train on full training set, start stepping the learning rate
