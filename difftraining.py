@@ -289,7 +289,8 @@ def weights_init(m):
         a = math.sqrt(3.0) * std
         init._no_grad_uniform_(m.conv.kernel.weight.data,-a,a)
 
-def train_strata(strata, gmaker, model, optimizer, losses, maxepoch, batch_size, input_tensor, stop=20000):
+def train_strata(strata, gmaker, model, optimizer, losses, maxepoch, batch_size, input_tensor, stop=20000, clip=0):
+    TRAIL = 100
     labels = torch.zeros(batch_size, dtype=torch.float32, device='cuda')
     bestloss = 100000 #best trailing average loss we've seen so far in this strata
     bestindex = len(losses) #position    
@@ -306,8 +307,8 @@ def train_strata(strata, gmaker, model, optimizer, losses, maxepoch, batch_size,
             loss = F.smooth_l1_loss(output.flatten(),labels.flatten())
             loss.backward()
             
-            if args.clip > 0:
-              nn.utils.clip_grad_norm_(model.parameters(),args.clip)
+            if clip > 0:
+              nn.utils.clip_grad_norm_(model.parameters(),clip)
 
             optimizer.step()
             losses.append(float(loss))
@@ -386,7 +387,6 @@ def main(args):
     input_tensor = torch.zeros(tensor_shape, dtype=torch.float32, device='cuda')
 
 
-    TRAIL = 100
 
     losses = []
     if args.model_type == 'Custom':
@@ -419,7 +419,7 @@ def main(args):
                     
     #train on full training set, start stepping the learning rate
     for i in range(3):
-        train_strata(examples, gmaker, model, optimizer, losses, args.maxepoch, batch_size, input_tensor, args.stop)
+        train_strata(examples, gmaker, model, optimizer, losses, args.maxepoch, batch_size, input_tensor, stop=args.stop, clip = args.clip)
         torch.save(model.state_dict(), os.path.join(wandb.run.dir, 'model_refine%d.pt'%i))
         scheduler.step()
         test_strata(valexamples, gmaker, model, batch_size, input_tensor)
